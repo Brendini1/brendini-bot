@@ -321,6 +321,10 @@ client.on('interactionCreate', async interaction => {
         const data = await aiResponse.json();
         let rawText = data.choices[0].message.content.trim();
         
+        if (rawText.startsWith('<')) {
+          throw new Error("AI returned an HTML error/safety page instead of JSON.");
+        }
+        
         rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
         const firstBracket = rawText.indexOf('[');
         const lastBracket = rawText.lastIndexOf(']');
@@ -465,6 +469,10 @@ client.on('interactionCreate', async interaction => {
 
       const aiData = await aiResponse.json();
       let rawText = aiData.choices[0].message.content.trim();
+      
+      if (rawText.startsWith('<')) {
+        throw new Error("AI returned an HTML error/safety page instead of JSON.");
+      }
       
       rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
       const firstBracket = rawText.indexOf('[');
