@@ -6,7 +6,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers]
 });
 
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const FOOTBALL_API_KEY = "87466794418c6364a319afd9c37515df";
 const VIP_ROLE_ID = "1546527537771839548";
 
@@ -20,6 +20,34 @@ const commands = [
 ].map(command => command.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+
+// Helper function to call native Gemini API directly
+async function callGeminiAPI(systemPrompt, userPrompt) {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: {
+          "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+          contents: [
+              {
+                  parts: [
+                      { text: systemPrompt + "\n\n" + userPrompt }
+                  ]
+              }
+          ]
+      })
+  });
+  
+  const data = await response.json();
+  if (data.candidates && data.candidates[0].content && data.candidates[0].content.parts) {
+      return data.candidates[0].content.parts[0].text.trim();
+  } else if (data.error) {
+      throw new Error(`Gemini API Error: ${data.error.message}`);
+  } else {
+      throw new Error("Invalid response structure from Gemini API");
+  }
+}
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}! Brendini Bets is live ⚡`);
@@ -276,56 +304,35 @@ client.on('interactionCreate', async interaction => {
           upcomingFixturesSummary += `\n- [${country}] ${leagueName} (${matchTime}): ${matchName} (ID: ${item.fixture.id})`;
         });
 
-        const aiResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-            "HTTP-Referer": "https://brendini-bets.web.app",
-            "X-Title": "Brendini Bets",
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model: "openrouter/free",
-            messages: [
-              {
-                role: "system",
-                content: `You are Brendini's elite professional sports quant and betting sharpshooter. 
-                
-                STRICTLY UPCOMING UNSTARTED FIXTURES TODAY:
-                ${upcomingFixturesSummary}
-                
-                CRITICAL RULES FOR ACCUMULATORS:
-                1. UPCOMING GAMES ONLY: Use ONLY unstarted matches listed above.
-                2. ADVANCED MULTI-LEG BUILDER PICKS: Include sharp multi-leg combo bets matching website standards.
-                3. SORTED BY PROBABILITY (HIGHEST FIRST): Sort the array of 5 accas strictly from HIGHEST win probability percentage down to LOWEST.
-                4. METRICS REQUIREMENT: Every card title MUST include its calculated Win Probability (%) and Bookmaker Odds Value (e.g., "🎯 Safe Banker Acca (82% Win | @ 1.85)").
-                5. JSON ONLY: Return ONLY a valid JSON array containing exactly 5 distinct objects matching this exact structure:
-                [
-                  {
-                    "title": "🎯 Safe Banker Acca (82% Win | @ 1.85)",
-                    "odds": "1.85",
-                    "legs": [
-                      { "match": "Exact match name from list", "pick": "Specific data-backed pick" }
-                    ]
-                  }
-                ]`
-              },
-              {
-                role: "user",
-                content: `Generate accas using strictly unstarted upcoming fixtures, sorted from highest win probability to lowest.`
-              }
+        const systemPrompt = `You are Brendini's elite professional sports quant and betting sharpshooter. 
+        
+        STRICTLY UPCOMING UNSTARTED FIXTURES TODAY:
+        ${upcomingFixturesSummary}
+        
+        CRITICAL RULES FOR ACCUMULATORS:
+        1. UPCOMING GAMES ONLY: Use ONLY unstarted matches listed above.
+        2. ADVANCED MULTI-LEG BUILDER PICKS: Include sharp multi-leg combo bets matching website standards.
+        3. SORTED BY PROBABILITY (HIGHEST FIRST): Sort the array of 5 accas strictly from HIGHEST win probability percentage down to LOWEST.
+        4. METRICS REQUIREMENT: Every card title MUST include its calculated Win Probability (%) and Bookmaker Odds Value (e.g., "🎯 Safe Banker Acca (82% Win | @ 1.85)").
+        5. JSON ONLY: Return ONLY a valid JSON array containing exactly 5 distinct objects matching this exact structure:
+        [
+          {
+            "title": "🎯 Safe Banker Acca (82% Win | @ 1.85)",
+            "odds": "1.85",
+            "legs": [
+              { "match": "Exact match name from list", "pick": "Specific data-backed pick" }
             ]
-          })
-        });
+          }
+        ]`;
 
-        const data = await aiResponse.json();
-        let rawText = data.choices[0].message.content.trim();
+        const userPrompt = `Generate accas using strictly unstarted upcoming fixtures, sorted from highest win probability to lowest.`;
+
+        let rawText = await callGeminiAPI(systemPrompt, userPrompt);
         
-        if (rawText.startsWith('<')) {
-          throw new Error("AI returned an HTML error/safety page instead of JSON.");
+        if (rawText.startsWith("```")) {
+            rawText = rawText.replace(/^```json\s*|^```\s*/, "").replace(/\s*```$/, "");
         }
-        
-        rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+
         const firstBracket = rawText.indexOf('[');
         const lastBracket = rawText.lastIndexOf(']');
         if (firstBracket !== -1 && lastBracket !== -1) {
@@ -386,7 +393,7 @@ client.on('interactionCreate', async interaction => {
     const [fixtureId, matchQuery] = interaction.values[0].split('|');
     
     await interaction.update({ 
-      content: `🤖 **Pulling Pro API Stats & Querying OpenRouter AI...** Building 6 elite betting slips for **${matchQuery}** matching your website standards. Please hold...`, 
+      content: `🤖 **Pulling Pro API Stats & Querying Google Gemini Pro...** Building 6 elite betting slips for **${matchQuery}** matching your website standards. Please hold...`, 
       embeds: [],
       components: [] 
     });
@@ -423,58 +430,40 @@ client.on('interactionCreate', async interaction => {
           }
       }
 
-      const aiResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-          "HTTP-Referer": "https://brendini-bets.web.app",
-          "X-Title": "Brendini Bets",
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: "openrouter/free",
-          messages: [
-            {
-              role: "system",
-              content: `You are Brendini's elite professional sports quant and betting sharpshooter, matching the exact logic used on the Brendini Bets website. 
-              
-              API-FOOTBALL PRO DATA PAYLOAD:
-              ${JSON.stringify(compiledProContext)}
-              
-              STRICT RULES (IDENTICAL TO WEBSITE):
-              1. USE ONLY VERIFIED CURRENT PLAYERS: Check lineups and player payloads.
-              2. EXACTLY 6 SLIPS: Generate exactly 6 distinct, high-value betting slips matching your website categories:
-                 - Slip 1: ⭐ Pro Match Favs (Win % | Odds)
-                 - Slip 2: 🎯 Deep-Scouted Single (Win % | Odds)
-                 - Slip 3: 🎯 Verified Pro Player Prop (Win % | Odds)
-                 - Slip 4: 🟨 Match Cards & Fouls Builder (Win % | Odds)
-                 - Slip 5: 🔥 Ultimate 90-Min Value Builder (Win % | Odds)
-                 - Slip 6: 💎 Ultimate Multi-Leg Safe Bet Builder (High value multi-leg accumulator slip)
-              3. METRICS REQUIREMENT: Every card title MUST include its calculated Win Probability (%) and Bookmaker Odds Value.
-              4. JSON ONLY: Return ONLY a valid JSON array of exactly 6 objects matching this structure, with no markdown wrapping:
-              [
-                {
-                  "title": "⭐ Pro Match Favs (64% Win | @ 2.05)",
-                  "odds": "2.05",
-                  "legs": [
-                    { "match": "${matchQuery}", "pick": "Specific data-backed pick" }
-                  ]
-                }
-              ]`
-            },
-            { role: "user", content: `Generate exactly 6 professional betting slips for ${matchQuery} matching website standards.` }
+      const systemPrompt = `You are Brendini's elite professional sports quant and betting sharpshooter, matching the exact logic used on the Brendini Bets website. 
+      
+      API-FOOTBALL PRO DATA PAYLOAD:
+      ${JSON.stringify(compiledProContext)}
+      
+      STRICT RULES (IDENTICAL TO WEBSITE):
+      1. USE ONLY VERIFIED CURRENT PLAYERS: Check lineups and player payloads.
+      2. EXACTLY 6 SLIPS: Generate exactly 6 distinct, high-value betting slips matching your website categories:
+         - Slip 1: ⭐ Pro Match Favs (Win % | Odds)
+         - Slip 2: 🎯 Deep-Scouted Single (Win % | Odds)
+         - Slip 3: 🎯 Verified Pro Player Prop (Win % | Odds)
+         - Slip 4: 🟨 Match Cards & Fouls Builder (Win % | Odds)
+         - Slip 5: 🔥 Ultimate 90-Min Value Builder (Win % | Odds)
+         - Slip 6: 💎 Ultimate Multi-Leg Safe Bet Builder (High value multi-leg accumulator slip)
+      3. METRICS REQUIREMENT: Every card title MUST include its calculated Win Probability (%) and Bookmaker Odds Value.
+      4. JSON ONLY: Return ONLY a valid JSON array of exactly 6 objects matching this structure, with no markdown wrapping:
+      [
+        {
+          "title": "⭐ Pro Match Favs (64% Win | @ 2.05)",
+          "odds": "2.05",
+          "legs": [
+            { "match": "${matchQuery}", "pick": "Specific data-backed pick" }
           ]
-        })
-      });
+        }
+      ]`;
 
-      const aiData = await aiResponse.json();
-      let rawText = aiData.choices[0].message.content.trim();
+      const userPrompt = `Generate exactly 6 professional betting slips for ${matchQuery} matching website standards.`;
+
+      let rawText = await callGeminiAPI(systemPrompt, userPrompt);
       
-      if (rawText.startsWith('<')) {
-        throw new Error("AI returned an HTML error/safety page instead of JSON.");
+      if (rawText.startsWith("```")) {
+          rawText = rawText.replace(/^```json\s*|^```\s*/, "").replace(/\s*```$/, "");
       }
-      
-      rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+
       const firstBracket = rawText.indexOf('[');
       const lastBracket = rawText.lastIndexOf(']');
       if (firstBracket !== -1 && lastBracket !== -1) {
