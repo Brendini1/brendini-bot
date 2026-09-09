@@ -6,7 +6,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers]
 });
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const FOOTBALL_API_KEY = "87466794418c6364a319afd9c37515df";
 const VIP_ROLE_ID = "1546527537771839548";
 
@@ -21,36 +21,36 @@ const commands = [
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
-// Helper function to call native Gemini API directly
-async function callGeminiAPI(systemPrompt, userPrompt) {
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${GEMINI_API_KEY}`, {
+// Helper function to call OpenAI API with strict JSON mode
+async function callOpenAIAPI(systemPrompt, userPrompt) {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${OPENAI_API_KEY}`
       },
       body: JSON.stringify({
-          contents: [
-              {
-                  parts: [
-                      { text: systemPrompt + "\n\n" + userPrompt }
-                  ]
-              }
-          ]
+          model: "gpt-4o-mini",
+          messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt }
+          ],
+          response_format: { type: "json_object" }
       })
   });
   
   const data = await response.json();
-  if (data.candidates && data.candidates[0].content && data.candidates[0].content.parts) {
-      return data.candidates[0].content.parts[0].text.trim();
+  if (data.choices && data.choices[0].message) {
+      return data.choices[0].message.content.trim();
   } else if (data.error) {
-      throw new Error(`Gemini API Error: ${data.error.message}`);
+      throw new Error(`OpenAI API Error: ${data.error.message}`);
   } else {
-      throw new Error("Invalid response structure from Gemini API");
+      throw new Error("Invalid response structure from OpenAI API");
   }
 }
 
 client.once('ready', async () => {
-  console.log(`Logged in as ${client.user.tag}! Brendini Bets is live ⚡`);
+  console.log(`Logged in as ${client.user.tag}! Brendini Bets bot is live on OpenAI ⚡`);
   try {
     const guildId = client.guilds.cache.first()?.id;
     if (guildId) {
@@ -314,32 +314,29 @@ client.on('interactionCreate', async interaction => {
         2. ADVANCED MULTI-LEG BUILDER PICKS: Include sharp multi-leg combo bets matching website standards.
         3. SORTED BY PROBABILITY (HIGHEST FIRST): Sort the array of 5 accas strictly from HIGHEST win probability percentage down to LOWEST.
         4. METRICS REQUIREMENT: Every card title MUST include its calculated Win Probability (%) and Bookmaker Odds Value (e.g., "🎯 Safe Banker Acca (82% Win | @ 1.85)").
-        5. JSON ONLY: Return ONLY a valid JSON array containing exactly 5 distinct objects matching this exact structure:
-        [
-          {
-            "title": "🎯 Safe Banker Acca (82% Win | @ 1.85)",
-            "odds": "1.85",
-            "legs": [
-              { "match": "Exact match name from list", "pick": "Specific data-backed pick" }
-            ]
-          }
-        ]`;
+        5. JSON ONLY: Return ONLY a valid JSON object containing an array property named "accas" with exactly 5 distinct objects matching this exact structure:
+        {
+          "accas": [
+            {
+              "title": "🎯 Safe Banker Acca (82% Win | @ 1.85)",
+              "odds": "1.85",
+              "legs": [
+                { "match": "Exact match name from list", "pick": "Specific data-backed pick" }
+              ]
+            }
+          ]
+        }`;
 
         const userPrompt = `Generate accas using strictly unstarted upcoming fixtures, sorted from highest win probability to lowest.`;
 
-        let rawText = await callGeminiAPI(systemPrompt, userPrompt);
+        let rawText = await callOpenAIAPI(systemPrompt, userPrompt);
         
         if (rawText.startsWith("```")) {
             rawText = rawText.replace(/^```json\s*|^```\s*/, "").replace(/\s*```$/, "");
         }
 
-        const firstBracket = rawText.indexOf('[');
-        const lastBracket = rawText.lastIndexOf(']');
-        if (firstBracket !== -1 && lastBracket !== -1) {
-            rawText = rawText.substring(firstBracket, lastBracket + 1);
-        }
-
-        const accasArray = JSON.parse(rawText);
+        const parsed = JSON.parse(rawText);
+        const accasArray = parsed.accas || parsed;
 
         const embedsArray = accasArray.map((acc, index) => {
           let legsFormatted = acc.legs.map(l => `• ${l.pick}\n   *(${l.match})*`).join('\n\n');
@@ -393,7 +390,7 @@ client.on('interactionCreate', async interaction => {
     const [fixtureId, matchQuery] = interaction.values[0].split('|');
     
     await interaction.update({ 
-      content: `🤖 **Pulling Pro API Stats & Querying Google Gemini Pro...** Building 6 elite betting slips for **${matchQuery}** matching your website standards. Please hold...`, 
+      content: `🤖 **Pulling Pro API Stats & Querying OpenAI GPT-4o-mini...** Building 6 elite betting slips for **${matchQuery}** matching your website standards. Please hold...`, 
       embeds: [],
       components: [] 
     });
@@ -445,32 +442,29 @@ client.on('interactionCreate', async interaction => {
          - Slip 5: 🔥 Ultimate 90-Min Value Builder (Win % | Odds)
          - Slip 6: 💎 Ultimate Multi-Leg Safe Bet Builder (High value multi-leg accumulator slip)
       3. METRICS REQUIREMENT: Every card title MUST include its calculated Win Probability (%) and Bookmaker Odds Value.
-      4. JSON ONLY: Return ONLY a valid JSON array of exactly 6 objects matching this structure, with no markdown wrapping:
-      [
-        {
-          "title": "⭐ Pro Match Favs (64% Win | @ 2.05)",
-          "odds": "2.05",
-          "legs": [
-            { "match": "${matchQuery}", "pick": "Specific data-backed pick" }
-          ]
-        }
-      ]`;
+      4. JSON ONLY: Return ONLY a valid JSON object containing an array property named "slips" with exactly 6 objects matching this structure:
+      {
+        "slips": [
+          {
+            "title": "⭐ Pro Match Favs (64% Win | @ 2.05)",
+            "odds": "2.05",
+            "legs": [
+              { "match": "${matchQuery}", "pick": "Specific data-backed pick" }
+            ]
+          }
+        ]
+      }`;
 
       const userPrompt = `Generate exactly 6 professional betting slips for ${matchQuery} matching website standards.`;
 
-      let rawText = await callGeminiAPI(systemPrompt, userPrompt);
+      let rawText = await callOpenAIAPI(systemPrompt, userPrompt);
       
       if (rawText.startsWith("```")) {
           rawText = rawText.replace(/^```json\s*|^```\s*/, "").replace(/\s*```$/, "");
       }
 
-      const firstBracket = rawText.indexOf('[');
-      const lastBracket = rawText.lastIndexOf(']');
-      if (firstBracket !== -1 && lastBracket !== -1) {
-        rawText = rawText.substring(firstBracket, lastBracket + 1);
-      }
-
-      const slips = JSON.parse(rawText);
+      const parsed = JSON.parse(rawText);
+      const slips = parsed.slips || parsed;
 
       const embedsArray = slips.map((slip, idx) => {
         let legsFormatted = slip.legs.map(l => `• ${l.pick}\n   *(${l.match})*`).join('\n\n');
