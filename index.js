@@ -1,5 +1,7 @@
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder } = require('discord.js');
 const http = require('http');
+const multer = require('multer');
+const { TwitterApi } = require('twitter-api-v2');
 require('dotenv').config();
 
 const client = new Client({
@@ -9,6 +11,16 @@ const client = new Client({
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const FOOTBALL_API_KEY = "87466794418c6364a319afd9c37515df";
 const VIP_ROLE_ID = "1546527537771839548";
+
+// Initialize Twitter Client safely via environment variables
+const twitterClient = new TwitterApi({
+  appKey: process.env.TWITTER_API_KEY || "",
+  appSecret: process.env.TWITTER_API_SECRET || "",
+  accessToken: process.env.TWITTER_ACCESS_TOKEN || "",
+  accessSecret: process.env.TWITTER_ACCESS_SECRET || "",
+});
+
+const upload = multer({ storage: multer.memoryStorage() });
 
 let cachedGlobalFixtures = {};
 let cachedRawFixtures = [];
@@ -21,7 +33,6 @@ const commands = [
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
-// Helper function to call OpenAI API with strict JSON mode
 async function callOpenAIAPI(systemPrompt, userPrompt) {
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -97,7 +108,6 @@ client.on('interactionCreate', async interaction => {
     }
   }
 
-  // Security Check: Only the original user can click their buttons/menus
   if (interaction.isButton() || interaction.isStringSelectMenu()) {
     const messageAuthorId = interaction.message.interaction?.user?.id;
     if (messageAuthorId && interaction.user.id !== messageAuthorId) {
@@ -108,7 +118,6 @@ client.on('interactionCreate', async interaction => {
   if (interaction.isButton()) {
     const hasVip = interaction.member.roles.cache.has(VIP_ROLE_ID);
 
-    // Smart Back Button Routing
     if (interaction.customId === 'btn_back_dashboard') {
       if (!hasVip) {
         const embed = new EmbedBuilder()
@@ -142,7 +151,6 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
-    // Direct VIP Dashboard Handler
     if (interaction.customId === 'btn_vip_dashboard') {
       const embed = new EmbedBuilder()
         .setColor(0x00FF7F)
@@ -159,7 +167,6 @@ client.on('interactionCreate', async interaction => {
       await interaction.update({ embeds: [embed], components: [row] });
     }
 
-    // Free Teaser Dashboard Handler
     if (interaction.customId === 'btn_free_dashboard') {
       await interaction.update({ content: '⚽ **Loading limited free fixtures...** Please wait.', embeds: [], components: [] });
 
@@ -226,7 +233,6 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
-    // VIP Sub-filters: Popular Leagues or All Leagues
     if (interaction.customId === 'btn_popular' || interaction.customId === 'btn_all_leagues') {
       await interaction.update({ content: '⚽ **Fetching live fixtures from API-Football...** Please wait.', embeds: [], components: [] });
 
@@ -360,7 +366,6 @@ client.on('interactionCreate', async interaction => {
     }
   }
 
-  // Handle League Selection -> Show Match Dropdown
   if (interaction.isStringSelectMenu() && interaction.customId === 'select_league') {
     const selectedLeague = interaction.values[0];
     const userLeagues = cachedGlobalFixtures[interaction.user.id] || {};
@@ -385,7 +390,6 @@ client.on('interactionCreate', async interaction => {
     await interaction.update({ embeds: [embed], components: [new ActionRowBuilder().addComponents(selectMenu)] });
   }
 
-  // Handle Match Selection -> Generate Exactly 6 Website-Identical AI Slips
   if (interaction.isStringSelectMenu() && interaction.customId === 'select_match_ai') {
     const [fixtureId, matchQuery] = interaction.values[0].split('|');
     
@@ -488,8 +492,20 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-// Stripe Webhook Listener
-const server = http.createServer((req, res) => {
+// HTTP Server handling Stripe Webhooks and Mobile Admin X Publishing
+const server = http.createServer(async (req, res) => {
+  // Enable CORS for your front-end apps
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // Stripe Webhook Endpoint
   if (req.method === 'POST' && req.url === '/stripe-webhook') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -514,14 +530,51 @@ const server = http.createServer((req, res) => {
         res.end(`Webhook Error: ${err.message}`);
       }
     });
-  } else {
-    res.writeHead(404);
-    res.end();
+    return;
   }
+
+  // Mobile Admin X (Twitter) Publishing Endpoint
+  if (req.method === 'POST' && req.url === '/api/publish-tweet') {
+    upload.single('image')(req, res, async function (err) {
+      if (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: "Image upload parsing failed." }));
+        return;
+      }
+
+      try {
+        const caption = req.body.caption || "";
+        const imageFile = req.file;
+
+        let mediaId;
+        if (imageFile) {
+          mediaId = await twitterClient.v1.uploadMedia(imageFile.buffer, { mimeType: imageFile.mimetype });
+        }
+
+        const tweetParams = { text: caption };
+        if (mediaId) {
+          tweetParams.media = { media_ids: [mediaId] };
+        }
+
+        const tweetResponse = await twitterClient.v2.tweet(tweetParams);
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, tweetId: tweetResponse.data.id }));
+      } catch (error) {
+        console.error("Twitter publishing error:", error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: error.message }));
+      }
+    });
+    return;
+  }
+
+  res.writeHead(404);
+  res.end();
 });
 
 server.listen(3000, () => {
-  console.log('Stripe webhook listener active on port 3000 🌐');
+  console.log('HTTP & Webhook server active on port 3000 🌐');
 });
 
 client.login(process.env.DISCORD_TOKEN);
