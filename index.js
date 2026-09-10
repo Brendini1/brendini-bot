@@ -492,7 +492,7 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-// HTTP Server handling Stripe Webhooks and Mobile Admin X Publishing
+// HTTP Server handling Stripe Webhooks and Mobile Admin X Publishing & AI Caption Generation
 const server = http.createServer(async (req, res) => {
   // Enable CORS for your front-end apps
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -528,6 +528,81 @@ const server = http.createServer(async (req, res) => {
       } catch (err) {
         res.writeHead(400);
         res.end(`Webhook Error: ${err.message}`);
+      }
+    });
+    return;
+  }
+
+  // AI Vision Caption Generator Endpoint
+  if (req.method === 'POST' && req.url === '/api/generate-caption') {
+    upload.single('image')(req, res, async function (err) {
+      if (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: "Image upload failed." }));
+        return;
+      }
+
+      try {
+        const imageFile = req.file;
+        if (!imageFile) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: "No image provided." }));
+          return;
+        }
+
+        const base64Image = imageFile.buffer.toString('base64');
+        const imageUrl = `data:${imageFile.mimetype};base64,${base64Image}`;
+
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${OPENAI_API_KEY}`
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [
+              {
+                role: "system",
+                content: `You are Brendini's elite betting sharpshooter. Look at the attached Bet365 bet builder screenshot and write a high-hype X (Twitter) caption matching this exact style:
+                
+                Example Style 1:
+                🚨 18/1 MEGA BUILDER 🚨
+                Mushuc Runa vs Leones kicks off NOW at 1:00 AM! Chasing a massive payout:
+                • Mushuc Runa or Double Chance • Over 8 Corners • Juan Anangono Anytime • Under 2 Goals in 1st Half
+                Tap in on the site before kickoff! 🔥⚽
+                #BrendiniBets #BettingTwitter
+
+                Example Style 2:
+                🚨 LATE NIGHT LOCK IN 🚨
+                Emelec vs Manta kicks off NOW at 1:00 AM! Backing this 9/2 value builder:
+                • Emelec or Double Chance • Over 2 Goals • Carrillo Anytime • Emelec Over 4 Corners
+                Tap in on the site before kickoff! 🔥⚽
+                #BrendiniBets #BettingTwitter
+
+                Rules: Extract the teams, total odds (e.g., 18/1 or 9/2), and every individual leg bullet point directly from the image. Keep the exact emoji styling, hashtags, and call to action.`
+              },
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: "Generate the X caption for this slip:" },
+                  { type: "image_url", image_url: { url: imageUrl } }
+                ]
+              }
+            ],
+            max_tokens: 300
+          })
+        });
+
+        const data = await response.json();
+        const caption = data.choices?.[0]?.message?.content?.trim() || "";
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, caption }));
+      } catch (error) {
+        console.error("AI Caption error:", error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: error.message }));
       }
     });
     return;
